@@ -201,7 +201,9 @@ export async function forwardTime(seconds, test) {
 export async function createSignatures(colony, taskId, signers, value, data) {
   const sourceAddress = colony.address;
   const destinationAddress = colony.address;
-  const nonce = await colony.getTaskChangeNonce.call(taskId);
+  await colony.incrementTaskChangeNonce(taskId);
+  const nonceData = await colony.getTaskChangeNonce.call(taskId);
+  const nonce = nonceData[0];
   const accountsJson = JSON.parse(fs.readFileSync("./test-accounts.json", "utf8"));
   const input = `0x${sourceAddress.slice(2)}${destinationAddress.slice(2)}${web3Utils.padLeft(value.toString("16"), "64", "0")}${data.slice(
     2
@@ -225,10 +227,11 @@ export async function createSignatures(colony, taskId, signers, value, data) {
   return { sigV, sigR, sigS };
 }
 
-export async function createSignaturesTrezor(colony, signers, value, data) {
+export async function createSignaturesTrezor(colony, taskId, signers, value, data) {
   const sourceAddress = colony.address;
   const destinationAddress = colony.address;
-  const nonce = await colony.getTaskChangeNonce.call();
+  const nonceData = await colony.getTaskChangeNonce.call(taskId);
+  const nonce = nonceData[0];
   const accountsJson = JSON.parse(fs.readFileSync("./test-accounts.json", "utf8"));
   const input = `0x${sourceAddress.slice(2)}${destinationAddress.slice(2)}${web3Utils.padLeft(value.toString("16"), "64", "0")}${data.slice(
     2

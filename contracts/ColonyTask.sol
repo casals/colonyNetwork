@@ -135,17 +135,25 @@ contract ColonyTask is ColonyStorage, DSMath {
     return taskCount;
   }
 
-  function getTaskChangeNonce(uint256 _id) public view returns (uint256) {
-    return taskChangeNonces[_id];
+  function getTaskChangeNonce(uint256 _id) public view returns (uint256, uint256, bool) {
+    return (taskChangeNonces[_id].value, taskChangeNonces[_id].blockTimestamp, taskChangeNonces[_id].valid);
   }
 
-  function getSignedMessageHash(uint256 _value, bytes _data, uint8 _mode) private returns (bytes32 txHash) {
+  function incrementTaskChangeNonce(uint256 _id) public {
+    Nonce storage lastNonce = taskChangeNonces[_id];
+    // todo: require the nonce has been executed or it's been over 24h since added
+    lastNonce.value++;
+    lastNonce.blockTimestamp = now;
+    lastNonce.valid = true;
+  }
+
+  function getSignedMessageHash(uint256 taskId, uint256 _value, bytes _data, uint8 _mode) private view returns (bytes32 txHash) {
     bytes32 msgHash = keccak256(
       address(this),
       address(this),
       _value,
       _data,
-      taskChangeNonces[taskId]
+      taskChangeNonces[taskId].value
     );
     if (_mode==0) {
       // 'Normal' mode - geth, etc.
@@ -185,14 +193,14 @@ contract ColonyTask is ColonyStorage, DSMath {
 
     address[] memory reviewerAddresses = new address[](2);
     for (uint i = 0; i < 2; i++) {
-      reviewerAddresses[i] = ecrecover(getSignedMessageHash(_value, _data, _mode[i]), _sigV[i], _sigR[i], _sigS[i]);
+      reviewerAddresses[i] = ecrecover(getSignedMessageHash(taskId, _value, _data, _mode[i]), _sigV[i], _sigR[i], _sigS[i]);
     }
 
     require(task.roles[r1].user == reviewerAddresses[0] || task.roles[r1].user == reviewerAddresses[1]);
     require(task.roles[r2].user == reviewerAddresses[0] || task.roles[r2].user == reviewerAddresses[1]);
-
-    taskChangeNonces[taskId]++;
     require(address(this).call.value(_value)(_data));
+    // Invalidate the nonce once transaction using it is executed
+    taskChangeNonces[taskId].valid = false;
   }
 
   function submitTaskWorkRating(uint256 _id, uint8 _role, bytes32 _ratingSecret) public

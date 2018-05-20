@@ -1,6 +1,8 @@
 /* globals artifacts */
 
-import { hexToUtf8, toBN } from "web3-utils";
+import fs from "fs";
+import ethUtils from "ethereumjs-util";
+import { hexToUtf8, toBN, padLeft, soliditySha3 } from "web3-utils";
 
 import {
   MANAGER,
@@ -98,11 +100,6 @@ contract("Colony", addresses => {
     it("should return zero task count", async () => {
       const taskCount = await colony.getTaskCount.call();
       assert.equal(taskCount, 0);
-    });
-
-    it("should return zero for taskChangeNonce", async () => {
-      const taskChangeNonce = await colony.getTaskChangeNonce.call(1);
-      assert.equal(taskChangeNonce, 0);
     });
 
     it("should fail if a non-admin tries to mint tokens", async () => {
@@ -292,7 +289,7 @@ contract("Colony", addresses => {
       assert.equal(worker[0], WORKER);
     });
 
-    it("should correctly increment `taskChangeNonce` for multiple updates on a single task", async () => {
+    it("should correctly increment task None for multiple updates on a single task", async () => {
       await colony.makeTask(SPECIFICATION_HASH, 1);
       await colony.setTaskRoleUser(1, WORKER_ROLE, WORKER);
 
@@ -303,7 +300,7 @@ contract("Colony", addresses => {
       await colony.executeTaskChange(sigs.sigV, sigs.sigR, sigs.sigS, [0, 0], 0, txData);
 
       let taskChangeNonce = await colony.getTaskChangeNonce.call(1);
-      assert.equal(taskChangeNonce, 1);
+      assert.equal(taskChangeNonce[0], 1);
 
       // Change the due date
       const dueDate = await currentBlockTime();
@@ -312,10 +309,10 @@ contract("Colony", addresses => {
       await colony.executeTaskChange(sigs.sigV, sigs.sigR, sigs.sigS, [0, 0], 0, txData);
 
       taskChangeNonce = await colony.getTaskChangeNonce.call(1);
-      assert.equal(taskChangeNonce, 2);
+      assert.equal(taskChangeNonce[0], 2);
     });
 
-    it("should correctly increment `taskChangeNonce` for multiple updates on multiple tasks", async () => {
+    it("should correctly increment nonces for multiple updates on multiple tasks", async () => {
       await colony.makeTask(SPECIFICATION_HASH, 1);
       await colony.setTaskRoleUser(1, WORKER_ROLE, WORKER);
 
@@ -333,22 +330,61 @@ contract("Colony", addresses => {
       const sigs2 = await createSignatures(colony, 2, signers, 0, txData2);
 
       // Execute the above 2 changes
-      await colony.executeTaskChange(sigs1.sigV, sigs1.sigR, sigs1.sigS, 0, txData1);
+      await colony.executeTaskChange(sigs1.sigV, sigs1.sigR, sigs1.sigS, [0, 0], 0, txData1);
       let taskChangeNonce = await colony.getTaskChangeNonce.call(1);
-      assert.equal(taskChangeNonce, 1);
-      await colony.executeTaskChange(sigs2.sigV, sigs2.sigR, sigs2.sigS, 0, txData2);
+      assert.equal(taskChangeNonce[0], 1);
+      await colony.executeTaskChange(sigs2.sigV, sigs2.sigR, sigs2.sigS, [0, 0], 0, txData2);
       taskChangeNonce = await colony.getTaskChangeNonce.call(2);
-      assert.equal(taskChangeNonce, 1);
+      assert.equal(taskChangeNonce[0], 1);
 
       // Change the task2 due date
       const dueDate = await currentBlockTime();
       const txData3 = await colony.contract.setTaskDueDate.getData(2, dueDate);
       const sigs3 = await createSignatures(colony, 2, signers, 0, txData3);
 
-      await colony.executeTaskChange(sigs3.sigV, sigs3.sigR, sigs3.sigS, 0, txData3);
+      await colony.executeTaskChange(sigs3.sigV, sigs3.sigR, sigs3.sigS, [0, 0], 0, txData3);
       taskChangeNonce = await colony.getTaskChangeNonce.call(2);
-      assert.equal(taskChangeNonce, 2);
+      assert.equal(taskChangeNonce[0], 2);
     });
+
+    it("should fail to execute a task change using an invalid nonce", async () => {
+      await colony.makeTask(SPECIFICATION_HASH, 1);
+      await colony.setTaskRoleUser(1, WORKER_ROLE, WORKER);
+
+      // Change the task brief
+      const txData = await colony.contract.setTaskBrief.getData(1, SPECIFICATION_HASH_UPDATED);
+      const signers = [MANAGER, WORKER];
+      // Use a bad nonce
+      const nonce = 123;
+      const value = 0;
+      const accountsJson = JSON.parse(fs.readFileSync("./test-accounts.json", "utf8"));
+      const input = `0x${colony.address.slice(2)}${colony.address.slice(2)}${padLeft(value.toString("16"), "64", "0")}${txData.slice(2)}${padLeft(
+        nonce.toString("16"),
+        "64",
+        "0"
+      )}`;
+      const sigV = [];
+      const sigR = [];
+      const sigS = [];
+      const msgHash = soliditySha3(input);
+
+      for (let i = 0; i < signers.length; i += 1) {
+        const user = signers[i].toString();
+        const privKey = accountsJson.private_keys[user];
+        const prefixedMessageHash = ethUtils.hashPersonalMessage(Buffer.from(msgHash.slice(2), "hex"));
+        const sig = ethUtils.ecsign(prefixedMessageHash, Buffer.from(privKey, "hex"));
+
+        sigV.push(sig.v);
+        sigR.push(`0x${sig.r.toString("hex")}`);
+        sigS.push(`0x${sig.s.toString("hex")}`);
+      }
+
+      await checkErrorRevert(colony.executeTaskChange(sigV, sigR, sigS, [0, 0], 0, txData));
+    });
+
+    it("should fail to execute a task change if it was rejected", async () => {});
+
+    it("should execute task change if more than 24h have passed since review requested", async () => {});
 
     it("should allow update of task brief signed by manager and worker", async () => {
       await colony.makeTask(SPECIFICATION_HASH, 1);
@@ -366,7 +402,7 @@ contract("Colony", addresses => {
       await colony.setTaskRoleUser(1, WORKER_ROLE, WORKER);
       const txData = await colony.contract.setTaskBrief.getData(1, SPECIFICATION_HASH_UPDATED);
       const signers = [MANAGER, WORKER];
-      const sigs = await createSignaturesTrezor(colony, signers, 0, txData);
+      const sigs = await createSignaturesTrezor(colony, 1, signers, 0, txData);
       await colony.executeTaskChange(sigs.sigV, sigs.sigR, sigs.sigS, [1, 1], 0, txData);
       const task = await colony.getTask.call(1);
       assert.equal(hexToUtf8(task[0]), SPECIFICATION_HASH_UPDATED);
@@ -377,8 +413,8 @@ contract("Colony", addresses => {
       await colony.setTaskRoleUser(1, WORKER_ROLE, WORKER);
       const txData = await colony.contract.setTaskBrief.getData(1, SPECIFICATION_HASH_UPDATED);
       const signers = [MANAGER, WORKER];
-      const sigs = await createSignatures(colony, signers, 0, txData);
-      const trezorSigs = await createSignaturesTrezor(colony, signers, 0, txData);
+      const sigs = await createSignatures(colony, 1, signers, 0, txData);
+      const trezorSigs = await createSignaturesTrezor(colony, 1, signers, 0, txData);
       await colony.executeTaskChange(
         [sigs.sigV[0], trezorSigs.sigV[1]],
         [sigs.sigR[0], trezorSigs.sigR[1]],
@@ -396,8 +432,8 @@ contract("Colony", addresses => {
       await colony.setTaskRoleUser(1, WORKER_ROLE, WORKER);
       const txData = await colony.contract.setTaskBrief.getData(1, SPECIFICATION_HASH_UPDATED);
       const signers = [MANAGER, WORKER];
-      const sigs = await createSignatures(colony, signers, 0, txData);
-      const trezorSigs = await createSignaturesTrezor(colony, signers, 0, txData);
+      const sigs = await createSignatures(colony, 1, signers, 0, txData);
+      const trezorSigs = await createSignaturesTrezor(colony, 1, signers, 0, txData);
       await checkErrorRevert(
         colony.executeTaskChange(
           [sigs.sigV[0], trezorSigs.sigV[0]],
